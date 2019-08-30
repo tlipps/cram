@@ -12,7 +12,8 @@
   :version "0.1"
   :author "Masayuki Takagi"
   :license "MIT"
-  :depends-on (alexandria)
+  :depends-on (alexandria
+               cl-transforms)
   :components ((:module "src"
                 :components
                 ((:file "quadtree"))))
