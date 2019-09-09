@@ -18,6 +18,7 @@
 (in-package :quadtree)
 
 (defvar *max-depth* 50)
+(defvar *middlepoint-offset* 0.00001) ;; [mm/10]
 
 (defstruct (quadtree (:constructor %make-quadtree)) ;; % prefix, because one should use make-quadtree instead
   object
@@ -88,11 +89,40 @@
 (defun intersects-with-subtrees-p (object subtrees)
   (declare (type 3d-vector object))
   (when (and object subtrees)
+    (print subtrees)
+    (print object)
+    (every #'identity (mapcar (lambda (st) (print (point-intersect-p st object)) (point-intersect-p st object)) subtrees))
     (every #'identity (mapcar (lambda (st) (point-intersect-p st object)) subtrees))))
+
+(defun insert-random-object-for-empty (quadtree)
+  (when quadtree
+    (destructuring-bind (x0 y0 x1 y1) (quadtree-boundary quadtree)
+      (setf (quadtree-object quadtree) (make-3d-vector
+                                        (/ (abs (- x1 x0)) (1+ (random 10)))
+                                        (/ (abs (- y1 y0)) (1+ (random 10)))
+                                        (if (full-p quadtree)
+                                            (+ *middlepoint-offset* (/ *middlepoint-offset* (1+ (random 10))))
+                                            1.0d0))))
+    quadtree))
 
 (defun middlepoint-of-quadtree-p (object quadtree)
   (declare (type 3d-vector object))
-  (intersects-with-subtrees-p object (subtrees quadtree)))
+  (when quadtree
+    (if (leaf-p quadtree)
+        (destructuring-bind (x0 y0 x1 y1) (quadtree:boundary quadtree)  ;;  d---c
+          (let* ((A (make-3d-vector x0 y0 0.0d0))                       ;;  | / |
+                 (C (make-3d-vector x1 y1 0.0d0))                       ;;  a---b
+                 (M (v+ A
+                        (v* ;; calc  middlepoint of boundary
+                         (v- c a)
+                         0.5d0))))
+            (point-intersect-p (make-quadtree (- (x M) *middlepoint-offset*)
+                                              (- (y M) *middlepoint-offset*)
+                                              (+ (x M) *middlepoint-offset*)
+                                              (+ (y M) *middlepoint-offset*))
+                               object)))
+        (intersects-with-subtrees-p object (subtrees quadtree)))))
+     
 
 (defun quadtree-equal (q1 q2)
   ;;TODO (declare (type quadtree q1 q2)))
@@ -117,16 +147,21 @@
     (insert (quadtree-ne quadtree) object)
     (insert (quadtree-sw quadtree) object)
     (insert (quadtree-se quadtree) object))
-  t)
+  quadtree)
 
 
 (defun coord-intersect-p (quadtree x y)
   (declare (type double-float x y))
   (point-intersect-p quadtree (make-3d-vector x y 0.0d0)))
 
+(defun 2d-dot-product (v-1 v-2)
+  "Returns the dot-product"
+  (+ (* (x v-1) (x v-2))
+     (* (y v-1) (y v-2))
+     ))
+
 (defun point-intersect-p (quadtree P)
   (declare (type 3d-vector P))
-  ;; if rotated? TODO
   (destructuring-bind (x0 y0 x1 y1) (quadtree:boundary quadtree)  ;;  d---c
     (let* ((A (make-3d-vector x0 y0 0.0d0))                       ;;  | / |
            (C (make-3d-vector x1 y1 0.0d0))                       ;;  a---b
@@ -144,8 +179,8 @@
            (AP (v- P A))
            (BC (v- C B))
            (BP (v- P B)))
-      (and (<= 0 (dot-product AB AP) (dot-product AB AB))
-           (<= 0 (dot-product BC BP) (dot-product BC BC))))))
+      (and (<= 0 (2d-dot-product AB AP) (2d-dot-product AB AB))
+           (<= 0 (2d-dot-product BC BP) (2d-dot-product BC BC))))))
 
 (defun object-equal (p1 p2)
   (declare (type 3d-vector p1 p2))
@@ -178,6 +213,86 @@
                  queried))
            (query quadtree x y)))
 
+(defun max-quadtrees (quadtrees)
+  "Returns the biggest quadtress which are just the with the biggest
+depth value"
+  (let ((maximum (alexandria::reduce #'max quadtrees :key #'quadtree-depth)))
+    (remove-if-not (alexandria:curry #'equal maximum) quadtrees :key #'quadtree-depth)))
+
+(defun some-subtree-node-p (quadtree)
+  "Returns if some subtree from the given `quadtree'
+is a node."
+  (some #'node-p (subtrees quadtree)))
+
+(defun quadtree->list (quadtree &key with-leaves)
+  (let ((parents `(,quadtree))
+        (visited-parents '()))
+    ;; Traverse tree and save visited parents in given var
+    (loop while (first parents) do
+      (push (pop parents) visited-parents)
+      (loop for subtree in (subtrees (first visited-parents)) do
+        (when (node-p subtree)
+          (setf parents (append parents (list subtree))))))
+    (if with-leaves
+        (remove-if-not (lambda (st) (and (identity st) (leaf-p st) (full-p st)))
+                       (alexandria::reduce #'append (mapcar #'subtrees visited-parents)))
+        visited-parents)))
+
+(defun minimize-quadtree (quadtree)
+  (let ((nodes (quadtree->list quadtree)))
+    ;; Try to remove redudant subtrees
+    (loop while nodes do
+      (let ((current-max-quadtrees (max-quadtrees nodes)))
+        (when (every #'some-subtree-node-p current-max-quadtrees)
+          (return))
+        (loop for parent in (remove-if #'some-subtree-node-p current-max-quadtrees) do
+          (remove-redundant-subtrees parent))
+        (setf nodes (nthcdr (length current-max-quadtrees)
+                            nodes)))))) ;; since quadtree was searched in level order
+;; visited-parents is sorted from a high to
+;; low depth value
+
+(defun normalize-quadtree (quadtree)
+  (let* ((leaves-and-nodes (quadtree->list quadtree :with-leaves t))
+         (leaves (remove-if #'node-p leaves-and-nodes))
+         (sum 0.0d0))
+    (loop for leave in leaves do
+      (incf sum (z (quadtree-object leave))))
+    (loop for entry in leaves-and-nodes do
+      (with-slots (object) entry
+        (setf object (make-3d-vector (x object)
+                                     (y object)
+                                     (float (/ (z object)
+                                               sum))))))))
+
+
+(defun pair-elements (l)
+  (when (> (length l) 1)
+    (append (list (subseq l 0 2))  (pair-elements (nthcdr 1 l)))))
+
+(defun remove-redundant-subtrees (quadtree)
+"If the filled subtrees of `quadtree' have the same value or are all empty,
+these subtrees will be removed, since they are redundant."       
+  (when quadtree
+    (let* ((non-empty-subtrees (remove-if-not #'identity
+                                             (mapcar #'quadtree-object (list
+                                                                        (quadtree-nw quadtree)
+                                                                        (quadtree-ne quadtree)
+                                                                        (quadtree-sw quadtree)
+                                                                        (quadtree-se quadtree)))))
+           (object-values-equal (every #'identity (mapcar
+                                                   (lambda (l) (same-value-as (first l) (second l)))
+                                                   (pair-elements non-empty-subtrees)))))
+      (when (or (not (first non-empty-subtrees))
+                object-values-equal)
+        (clear-subtrees-of quadtree)
+        (setf (quadtree-object quadtree)
+              (make-3d-vector
+               (x (quadtree-object quadtree))
+               (y (quadtree-object quadtree))
+               (z (quadtree-object (quadtree-nw quadtree)))))))
+    quadtree))
+
 
          
 (defun clear-in-quadtree (quadtree x y &optional remove-subtrees-if-possible)
@@ -191,21 +306,19 @@
         (setf (quadtree-object (first (last queried-trees 1))) cleared-point)
         (when remove-subtrees-if-possible
           (let ((parent (first (last queried-trees 2))))
-            (when (loop for (obj1 obj2) on
-                                        (remove-if-not #'identity
-                                                       (mapcar #'quadtree-object (list
-                                                                                  (quadtree-nw parent)
-                                                                                  (quadtree-ne parent)
-                                                                                  (quadtree-sw parent)
-                                                                                  (quadtree-se parent))))
-                        do (return (same-value-as obj1 obj2)))
-              
-              (clear-subtrees-of parent)
-              (setf (quadtree-object parent)
-                    (make-3d-vector
-                     (x (quadtree-object parent))
-                     (y (quadtree-object parent))
-                     0.0d0)))))))))
+            (remove-redundant-subtrees parent)))))))
+
+(defun round-to (number precision &optional (what #'round))
+    (let ((div (expt 10 precision)))
+      (/ (funcall what (* number div)) div)))
+
+(defun add-offset-if-middlepoint (object quadtree)
+  (declare (type 3d-vector object))
+  (when (middlepoint-of-quadtree-p object quadtree)
+    (setf object (make-3d-vector (round-to (- (x object) *middlepoint-offset*) 5)
+                                 (round-to (- (y object) *middlepoint-offset*) 5)
+                                 (z object))))
+  object)
 
 (defun insert (quadtree object)
   (declare (type 3d-vector object))
@@ -221,7 +334,7 @@
      t)
     ;; Insert the object to the quadtree, if leaf is free.
     ((not (full-p quadtree))
-     (setf (quadtree-object quadtree) object)
+     (setf (quadtree-object quadtree) (add-offset-if-middlepoint object quadtree))
      t)
     ;; If leaf is not free, but has same coords as object, update the object
     ((same-coords-as (quadtree-object quadtree) object)
@@ -230,7 +343,7 @@
     ;; When the quadtree is full and is not at its max depth, subdevide it and
     ;; recursively insert the object.
     ((and (not (max-depth-p quadtree))
-          (not (object-equal object (quadtree-object quadtree))))
+          (not (same-value-as object (quadtree-object quadtree))))
      (subdevide quadtree)
      (insert quadtree object))
     ;; Otherwise if the max-depth-p or the objects were equal (object-equal returned t),
@@ -321,7 +434,8 @@
 (defun matrix->quadtree (origin-x origin-y resolution matrix &optional (threshold 0.0d0))
   "Creates an quadtree from the matrix `matrix'. The elements from `matrix' will
 be mapped to the centers of the points. Since adding zeros is important too, this
-will be done too."
+will be done too. `origin-x' and `origin-y' have to be the bottom left corner and
+`resolution' is the width of a cell in the returned quadtree."
   (declare (type double-float origin-x origin-y resolution)
            (type (simple-array * 2) matrix))
   (let* ((width (coerce (* (array-dimension matrix 1) resolution) 'double-float))
