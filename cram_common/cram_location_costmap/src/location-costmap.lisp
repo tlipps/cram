@@ -115,6 +115,38 @@
 (define-hook on-visualize-costmap (costmap))
 (define-hook on-visualize-costmap-sample (point))
 
+(defun init-cost-map (origin-x origin-y width height resolution type)
+  (when type
+    (cond
+      ((equal type 'arry)
+       (cma:make-double-matrix
+        (truncate (/ width resolution))
+        (truncate (/ height resolution))
+        :initial-element 1.0d0))
+      ((equal type 'quadtree)
+       (make-quadtree origin-x
+                      origin-y
+                      (+ origin-x (* width resolution))
+                      (+ origin-y (* height resolution))))
+      (t
+       (error 'simple-error "the given type ~A is not known." type)))))
+
+(defun normalize-cost-map (map)
+  (when map
+    (cond
+      ((typep map 'array)
+       (let ((sum 0.0d0))
+         (dotimes (row (cma:height map))
+           (dotimes (column (cma:width map))
+            (incf sum (aref map row column))))
+         (when (= sum 0)
+           (error 'invalid-probability-distribution))
+         (setf (slot-value map 'cost-map) (cma:m./ map sum))))
+      ((typep map 'quadtree)
+       (normalize-quadtree map)))))
+       
+       
+
 (defmethod get-cost-map ((map location-costmap))
   "Returns the costmap matrix of `map', i.e. if not generated yet,
 calls the generator functions and runs normalization."
@@ -128,19 +160,10 @@ calls the generator functions and runs normalization."
                   #'> :key (compose
                             #'costmap-generator-name->score
                             #'generator-name)))
-      (let ((new-cost-map (cma:make-double-matrix
-                           (truncate (/ width resolution))
-                           (truncate (/ height resolution))
-                           :initial-element 1.0d0))
-            (sum 0.0d0))
+      (let ((new-cost-map (init-cost-map origin-x origin-y width height resolution type)))
         (dolist (generator (cost-functions map))
           (setf new-cost-map (generate generator new-cost-map map)))
-        (dotimes (row (cma:height new-cost-map))
-          (dotimes (column (cma:width new-cost-map))
-            (incf sum (aref new-cost-map row column))))
-        (when (= sum 0)
-          (error 'invalid-probability-distribution))
-        (setf (slot-value map 'cost-map) (cma:m./ new-cost-map sum))
+        (normalize-cost-map new-cost-map)
         (on-visualize-costmap map)))
     (slot-value map 'cost-map)))
 

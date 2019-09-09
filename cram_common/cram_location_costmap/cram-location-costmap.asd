@@ -40,6 +40,8 @@
                visualization_msgs-msg
                trivial-garbage
                cram-tf ; for visualizing markers in the fixed frame
+
+               quadtree
                )
   :components
   ((:module "src"
