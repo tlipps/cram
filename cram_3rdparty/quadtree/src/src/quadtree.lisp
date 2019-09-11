@@ -157,8 +157,7 @@
 (defun 2d-dot-product (v-1 v-2)
   "Returns the dot-product"
   (+ (* (x v-1) (x v-2))
-     (* (y v-1) (y v-2))
-     ))
+     (* (y v-1) (y v-2))))
 
 (defun point-intersect-p (quadtree P)
   (declare (type 3d-vector P))
@@ -238,7 +237,19 @@ is a node."
                        (alexandria::reduce #'append (mapcar #'subtrees visited-parents)))
         visited-parents)))
 
+(defun quadtree-leaves (quadtree)
+  (remove-if-not #'leaf-p (quadtree->list quadtree)))
+
 (defun minimize-quadtree (quadtree)
+  ;; TODO: make quadtree more dynamic by removing blank spaces around
+  ;; the middle point by making the quadtree smaller: e. g. from
+  ;; 0 0 0 0
+  ;; 0 1 1 0
+  ;; 0 1 1 0 
+  ;; 0 0 0 0
+  ;; to
+  ;; 1 1
+  ;; 1 1
   (let ((nodes (quadtree->list quadtree)))
     ;; Try to remove redudant subtrees
     (loop while nodes do
@@ -444,12 +455,9 @@ will be done too. `origin-x' and `origin-y' have to be the bottom left corner an
          (x1 (+ origin-x width))
          (y0 origin-y)
          (y1 (+ origin-y height))
-         (qt (make-quadtree (- x0 0);; 0.0000001d0)
-                            (- y0 0);;0.0000001d0)
-                            (+ x1 0);;0.0000001d0)
-                            (+ y1 0))));;0.0000001d0))))
+         (qt (make-quadtree x0 y0 x1 y1)))
     (dotimes (y (array-dimension matrix 1))
-      (let ((backward-y (- (- (array-dimension matrix 1) 1) y)))
+      (let ((backward-y (- (1- (array-dimension matrix 1)) y)))
         (dotimes (x (array-dimension matrix 0))
           (when (>= (aref matrix backward-y x) threshold)
             (insert qt
@@ -458,6 +466,42 @@ will be done too. `origin-x' and `origin-y' have to be the bottom left corner an
                         (+ origin-x (* x resolution)))
                      (- (+ origin-y (* y resolution) resolution)
                         (/ resolution 2))
-                     (aref matrix backward-y x))
-                    )))))
+                     (aref matrix backward-y x)))))))
     qt))
+
+(defun base-nth (l1 l2 n fun)
+  (if (funcall fun (nth n l1) (nth n l2))
+      (nth n l1)
+      (nth n l2)))
+
+(defun >nth (l1 l2 n)
+  (base-nth l1 l2 n #'>))
+
+(defun <nth (l1 l2 n)
+  (base-nth l1 l2 n #'<))
+
+(defun quadtree-resolution (qt)
+  (destructuring-bind (x0 y0 x1 y1) (quadtree-boundary qt)
+    (let ((res0 (round-to (abs (- x1 x0)) 5))
+          (res1 (round-to (abs (- y1 y0)) 5)))
+      (if (equal res0 res1)
+          res0
+          (error #'simple-error "oh no")))))
+
+(defun merge-quadtrees (qt1 &rest quadtrees)
+  (let* ((sorted-by-resolution (sort (append `(,qt1) quadtrees) #'<=
+                                     :key #'quadtree-resolution))
+         (boundries (mapcar #'quadtree-boundary (append `(,qt1)
+                                                        quadtrees)))
+         (min (reduce (lambda (l1 l2)
+                        (list (<nth l1 l2 0)
+                              (<nth l1 l2 1)))
+                      boundries))
+         (max (reduce (lambda (l1 l2)
+                        (list (>nth l1 l2 2)
+                              (>nth l1 l2 3)))
+                      boundries))
+         (merged-qt (make-quadtree (first min) (second min)
+                                   (first max) (second max))))
+   
+  ))
