@@ -143,10 +143,18 @@
             (quadtree-sw quadtree) (%make-quadtree-internal x0 y0 xmid ymid depth max-depth)
             (quadtree-se quadtree) (%make-quadtree-internal xmid y0 x1 ymid depth max-depth))))
   (let ((object (quadtree-object quadtree)))
-    (insert (quadtree-nw quadtree) object)
-    (insert (quadtree-ne quadtree) object)
-    (insert (quadtree-sw quadtree) object)
-    (insert (quadtree-se quadtree) object))
+    (if object
+        (progn
+          (insert (quadtree-nw quadtree) object)
+          (insert (quadtree-ne quadtree) object)
+          (insert (quadtree-sw quadtree) object)
+          (insert (quadtree-se quadtree) object))
+        (progn
+          (insert (quadtree-nw quadtree) (quadtree-empty-middlepoint (quadtree-nw quadtree)))
+          (insert (quadtree-ne quadtree) (quadtree-empty-middlepoint (quadtree-ne quadtree)))
+          (insert (quadtree-sw quadtree) (quadtree-empty-middlepoint (quadtree-sw quadtree)))
+          (insert (quadtree-se quadtree) (quadtree-empty-middlepoint (quadtree-se quadtree)))
+          (setf (quadtree-object quadtree) (quadtree-empty-middlepoint quadtree)))))
   quadtree)
 
 
@@ -251,15 +259,15 @@ is a node."
   ;; 1 1
   ;; 1 1
   (let ((nodes (quadtree->list quadtree)))
-    ;; Try to remove redudant subtrees
+    ;; Try to remove redundant subtrees
     (loop while nodes do
       (let ((current-max-quadtrees (max-quadtrees nodes)))
         (when (every #'some-subtree-node-p current-max-quadtrees)
           (return))
         (loop for parent in (remove-if #'some-subtree-node-p current-max-quadtrees) do
-          (remove-redundant-subtrees parent))
-        (setf nodes (nthcdr (length current-max-quadtrees)
-                            nodes)))))) ;; since quadtree was searched in level order
+          (cleanup-leaves parent))
+        (setf nodes (nthcdr (length current-max-quadtrees) nodes))))))
+;; since quadtree was searched in level order
 ;; visited-parents is sorted from a high to
 ;; low depth value
 
@@ -281,27 +289,31 @@ is a node."
   (when (> (length l) 1)
     (append (list (subseq l 0 2))  (pair-elements (nthcdr 1 l)))))
 
-(defun remove-redundant-subtrees (quadtree)
+(defun cleanup-leaves (quadtree)
 "If the filled subtrees of `quadtree' have the same value or are all empty,
 these subtrees will be removed, since they are redundant."       
   (when quadtree
     (let* ((non-empty-subtrees (remove-if-not #'identity
-                                             (mapcar #'quadtree-object (list
-                                                                        (quadtree-nw quadtree)
-                                                                        (quadtree-ne quadtree)
-                                                                        (quadtree-sw quadtree)
-                                                                        (quadtree-se quadtree)))))
+                                              (subtrees quadtree)
+                                              :key #'quadtree-object))
            (object-values-equal (every #'identity (mapcar
                                                    (lambda (l) (same-value-as (first l) (second l)))
-                                                   (pair-elements non-empty-subtrees)))))
-      (when (or (not (first non-empty-subtrees))
-                object-values-equal)
-        (clear-subtrees-of quadtree)
-        (setf (quadtree-object quadtree)
-              (make-3d-vector
-               (x (quadtree-object quadtree))
-               (y (quadtree-object quadtree))
-               (z (quadtree-object (quadtree-nw quadtree)))))))
+                                                   (pair-elements
+                                                    (mapcar
+                                                    #'quadtree-object
+                                                    non-empty-subtrees))))))
+      (when (and 
+             object-values-equal
+             (every #'leaf-p non-empty-subtrees))
+        (let ((value (if non-empty-subtrees
+                         (quadtree-object (quadtree-nw quadtree))
+                         0.0d0)))
+          (setf (quadtree-object quadtree)
+                (make-3d-vector
+                 (x (quadtree-object quadtree))
+                 (y (quadtree-object quadtree))
+                 (z value)))
+          (clear-subtrees-of quadtree))))
     quadtree))
 
 
@@ -331,32 +343,56 @@ these subtrees will be removed, since they are redundant."
                                  (z object))))
   object)
 
-(defun insert (quadtree object)
-  (declare (type 3d-vector object))
+(defun quadtree-empty-middlepoint (quadtree)
+  (when quadtree
+    (destructuring-bind (x0 y0 x1 y1) (boundary quadtree)      
+      (let ((START (make-3d-vector x0 y0 0.0d0))
+            (END (make-3d-vector x1 y1 0.0d0)))
+        (v+ START
+            (v*
+             (v- END START)
+             0.5d0))))))
+
+
+(defun insert (quadtree object &key wrt-resolution)
   (cond
     ;; When the object does not intersect the quadtree, just return nil.
     ((not (if quadtree (point-intersect-p quadtree object))) nil)
     ;; When the quadtree is a node, recursively insert the object to its children.
     ((node-p quadtree)
-     (insert (quadtree-nw quadtree) object)
-     (insert (quadtree-ne quadtree) object)
-     (insert (quadtree-sw quadtree) object)
-     (insert (quadtree-se quadtree) object)
+     (insert (quadtree-nw quadtree) object :wrt-resolution wrt-resolution)
+     (insert (quadtree-ne quadtree) object :wrt-resolution wrt-resolution)
+     (insert (quadtree-sw quadtree) object :wrt-resolution wrt-resolution)
+     (insert (quadtree-se quadtree) object :wrt-resolution wrt-resolution)
      t)
-    ;; Insert the object to the quadtree, if leaf is free.
-    ((not (full-p quadtree))
+    ;; Insert the object to the quadtree, if leaf is free or if the
+    ;; resolution of the quadtree is smaller or equal to the given
+    ;; resolution.
+    ((and (not (full-p quadtree))
+          (if wrt-resolution
+              (<= (quadtree-resolution quadtree) wrt-resolution)
+              t))
      (setf (quadtree-object quadtree) (add-offset-if-middlepoint object quadtree))
      t)
     ;; If leaf is not free, but has same coords as object, update the object
-    ((same-coords-as (quadtree-object quadtree) object)
+    ((and (full-p quadtree)
+          (or
+           (if wrt-resolution
+               (<= (quadtree-resolution quadtree) wrt-resolution)
+               nil)
+           (same-coords-as (quadtree-object quadtree) object)))
      (setf (quadtree-object quadtree) object)
      t)
     ;; When the quadtree is full and is not at its max depth, subdevide it and
     ;; recursively insert the object.
     ((and (not (max-depth-p quadtree))
-          (not (same-value-as object (quadtree-object quadtree))))
+               (if wrt-resolution
+                  (> (quadtree-resolution quadtree) wrt-resolution)
+                  t))         
      (subdevide quadtree)
-     (insert quadtree object))
+     (print "after subdiv")
+     (print quadtree)
+     (insert quadtree object :wrt-resolution wrt-resolution))
     ;; Otherwise if the max-depth-p or the objects were equal (object-equal returned t),
     ;; do nothing, since the object represents accordingly the given object. 
     (t
