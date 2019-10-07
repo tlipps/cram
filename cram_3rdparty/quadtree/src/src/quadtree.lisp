@@ -89,9 +89,7 @@
 (defun intersects-with-subtrees-p (object subtrees)
   (declare (type 3d-vector object))
   (when (and object subtrees)
-    (print subtrees)
-    (print object)
-    (every #'identity (mapcar (lambda (st) (print (point-intersect-p st object)) (point-intersect-p st object)) subtrees))
+    ;;(every #'identity (mapcar (lambda (st) (print (point-intersect-p st object)) (point-intersect-p st object)) subtrees))
     (every #'identity (mapcar (lambda (st) (point-intersect-p st object)) subtrees))))
 
 (defun insert-random-object-for-empty (quadtree)
@@ -129,7 +127,7 @@
   
   )
     
-(defun subdevide (quadtree)
+(defun subdevide (quadtree &key erease-object)
   (unless (leaf-p quadtree)
     (error "The quadtree ~A is already subdevided." quadtree))
   (destructuring-bind (x0 y0 x1 y1) (boundary quadtree)
@@ -144,11 +142,18 @@
             (quadtree-se quadtree) (%make-quadtree-internal xmid y0 x1 ymid depth max-depth))))
   (let ((object (quadtree-object quadtree)))
     (if object
-        (progn
-          (insert (quadtree-nw quadtree) object)
-          (insert (quadtree-ne quadtree) object)
-          (insert (quadtree-sw quadtree) object)
-          (insert (quadtree-se quadtree) object))
+        (if erease-object
+            (progn
+              (insert (quadtree-nw quadtree) (quadtree-empty-middlepoint (quadtree-nw quadtree)))
+              (insert (quadtree-ne quadtree) (quadtree-empty-middlepoint (quadtree-ne quadtree)))
+              (insert (quadtree-sw quadtree) (quadtree-empty-middlepoint (quadtree-sw quadtree)))
+              (insert (quadtree-se quadtree) (quadtree-empty-middlepoint (quadtree-se quadtree)))
+              (setf (quadtree-object quadtree) (quadtree-empty-middlepoint quadtree)))
+            (progn
+              (insert (quadtree-nw quadtree) object)
+              (insert (quadtree-ne quadtree) object)
+              (insert (quadtree-sw quadtree) object)
+              (insert (quadtree-se quadtree) object)))
         (progn
           (insert (quadtree-nw quadtree) (quadtree-empty-middlepoint (quadtree-nw quadtree)))
           (insert (quadtree-ne quadtree) (quadtree-empty-middlepoint (quadtree-ne quadtree)))
@@ -169,25 +174,16 @@
 
 (defun point-intersect-p (quadtree P)
   (declare (type 3d-vector P))
-  (destructuring-bind (x0 y0 x1 y1) (quadtree:boundary quadtree)  ;;  d---c
-    (let* ((A (make-3d-vector x0 y0 0.0d0))                       ;;  | / |
-           (C (make-3d-vector x1 y1 0.0d0))                       ;;  a---b
-           (AM (v* ;; calc  middlepoint of boundary
-                (v- c a)
-                0.5d0))
-           (B (v+
-               A AM
-               (rotate ;; calc point b, which is between a and c 
-                (axis-angle->quaternion 
-                 (make-3d-vector 0 0 1)
-                 (+ pi (/ pi 2))) ;; rotate around 270°C
-                AM)))
-           (AB (v- B A))
-           (AP (v- P A))
-           (BC (v- C B))
-           (BP (v- P B)))
-      (and (<= 0 (2d-dot-product AB AP) (2d-dot-product AB AB))
-           (<= 0 (2d-dot-product BC BP) (2d-dot-product BC BC))))))
+  (let* ((corner-points (quadtree-boundary->corner-points quadtree))
+         (A (first corner-points))  ;;  D---C
+         (B (second corner-points)) ;;  | / |
+         (C (third corner-points))  ;;  A---B
+         (AB (v- B A))
+         (AP (v- P A))
+         (BC (v- C B))
+         (BP (v- P B)))
+    (and (<= 0 (2d-dot-product AB AP) (2d-dot-product AB AB))
+         (<= 0 (2d-dot-product BC BP) (2d-dot-product BC BC)))))
 
 (defun object-equal (p1 p2)
   (declare (type 3d-vector p1 p2))
@@ -374,7 +370,9 @@ these subtrees will be removed, since they are redundant."
               t))
      (setf (quadtree-object quadtree) (add-offset-if-middlepoint object quadtree))
      t)
-    ;; If leaf is not free, but has same coords as object, update the object
+    ;; If leaf is not free, but has same coords as object or
+    ;; resolution of this quadtree is smaller or equal to the given
+    ;; resolution, update the object
     ((and (full-p quadtree)
           (or
            (if wrt-resolution
@@ -389,9 +387,7 @@ these subtrees will be removed, since they are redundant."
                (if wrt-resolution
                   (> (quadtree-resolution quadtree) wrt-resolution)
                   t))         
-     (subdevide quadtree)
-     (print "after subdiv")
-     (print quadtree)
+     (subdevide quadtree :erease-object wrt-resolution)
      (insert quadtree object :wrt-resolution wrt-resolution))
     ;; Otherwise if the max-depth-p or the objects were equal (object-equal returned t),
     ;; do nothing, since the object represents accordingly the given object. 
@@ -522,22 +518,153 @@ will be done too. `origin-x' and `origin-y' have to be the bottom left corner an
           (res1 (round-to (abs (- y1 y0)) 5)))
       (if (equal res0 res1)
           res0
-          (error #'simple-error "oh no")))))
+          (error 'simple-error "oh no")))))
 
 (defun merge-quadtrees (qt1 &rest quadtrees)
-  (let* ((sorted-by-resolution (sort (append `(,qt1) quadtrees) #'<=
-                                     :key #'quadtree-resolution))
-         (boundries (mapcar #'quadtree-boundary (append `(,qt1)
-                                                        quadtrees)))
-         (min (reduce (lambda (l1 l2)
-                        (list (<nth l1 l2 0)
-                              (<nth l1 l2 1)))
-                      boundries))
-         (max (reduce (lambda (l1 l2)
-                        (list (>nth l1 l2 2)
-                              (>nth l1 l2 3)))
-                      boundries))
-         (merged-qt (make-quadtree (first min) (second min)
-                                   (first max) (second max))))
+  (when quadtrees
+    (let* ((merged-qt '())
+           (leaves-qt1 (quadtree-leaves qt1))
+           (leaves-qt2 (quadtree-leaves (first quadtrees)))
    
-  ))
+           ))))
+
+(defun quadtree-boundary->vectors (qt)
+  "Retruns vectors AB, BC, CD, DA in a list"
+  (mapcar #'v- (mapcar #'reverse (quadtree-boundary->edge-points qt))))
+
+(defun quadtree-boundary->edge-points (qt)
+  (when qt
+    (let* ((corner-points (quadtree-boundary->corner-points qt))
+           (A (first corner-points))
+           (B (second corner-points))
+           (C (third corner-points))
+           (D (fourth corner-points)))
+      (list `(,A ,B) `(,B ,C) `(,C ,D) `(,D ,A)))))
+
+(defun quadtree-boundary->corner-points (qt)
+  (when qt
+    (destructuring-bind (x0 y0 x1 y1) (quadtree-boundary qt)        ;;  D---C
+      (let* ((A (make-3d-vector x0 y0 0.0d0))                       ;;  | M |
+             (C (make-3d-vector x1 y1 0.0d0))                       ;;  A---B
+             (AM (v* ;; calc  middlepoint of boundary
+                  (v- C A)
+                  0.5d0))
+             (B (v+
+                 A AM
+                 (rotate ;; calc point M, which is between a and c 
+                  (axis-angle->quaternion 
+                   (make-3d-vector 0 0 1)
+                   (+ pi (/ pi 2))) ;; rotate around 270°C
+                  AM)))
+             (D (v+
+                 A AM
+                 (rotate ;; calc point M, which is between a and c 
+                  (axis-angle->quaternion 
+                   (make-3d-vector 0 0 1)
+                   (/ pi 2)) ;; rotate around 90°C
+                  AM))))
+        (mapcar #'v-round-to (list A B C D))))))
+
+(defun points->vector-points (points)
+  "Returns vector start and end points between given points in list
+`points'."
+  (when points
+    (let ((ret '()))
+      (loop for i from 0 to (1- (length points)) do
+        (loop for j from 0 to (1- (length points)) do
+          (when (> j i)
+            (push (list (nth i points) (nth j points)) ret))))
+      ret)))
+
+(defun intersecting-vector-points-lists (vec-points-list-1
+                                         vec-points-list-2
+                                         &optional
+                                           intersecting-counts-only-with-limited-vector-length-p)
+  (when (and vec-points-list-1 vec-points-list-2)
+    (let ((ret '()))
+      (loop for vec-point-1 in vec-points-list-1 do
+        (loop for vec-point-2 in vec-points-list-2 do
+          (multiple-value-bind (intersected-point valid-intersection-p)
+              (point-of-intersection (first vec-point-1) (second vec-point-1)
+                                     (first vec-point-2) (second vec-point-2))
+            (when intersected-point
+              (let ((round-intersected-point (v-round-to intersected-point)))
+                (when (or (not ret)
+                          (not (member round-intersected-point ret :test #'v-equal)))
+                  (if intersecting-counts-only-with-limited-vector-length-p
+                      (when valid-intersection-p
+                        (push round-intersected-point ret))
+                      (push round-intersected-point ret))))))))
+      ret)))
+
+(defun intersecting-points (qt1 qt2)
+  (when (and qt1 qt2
+             (leaf-p qt1)
+             (leaf-p qt2))
+    (let* ((qt1-edge-points (quadtree-boundary->edge-points qt1))
+           (qt2-edge-points (quadtree-boundary->edge-points qt2))
+           (intersecting-points-between-edges
+             (intersecting-vector-points-lists qt1-edge-points
+                                               qt2-edge-points))
+           (vector-points-of-intersecting-points
+             (points->vector-points intersecting-points-between-edges))
+           (all-intersecting-points
+             (append
+              (intersecting-vector-points-lists
+               vector-points-of-intersecting-points
+               qt2-edge-points)
+              (intersecting-vector-points-lists
+               vector-points-of-intersecting-points
+               qt1-edge-points))))
+      (print all-intersecting-points)
+      (remove-if-not (lambda (p)
+                       (and (point-intersect-p qt1 p)
+                            (point-intersect-p qt2 p)))
+                     all-intersecting-points))))
+
+
+(defun v-equal (v w)
+  (declare (type 3d-vector v w))
+  (and (equal (x v) (x w))
+       (equal (y v) (y w))
+       (equal (z v) (z w))))
+
+(defun v-round-to (v &optional (precision 3))
+  (declare (type 3d-vector v))
+  (make-3d-vector (round-to (x v) precision)
+                  (round-to (y v) precision)
+                  (z v)))
+
+(defun point-of-intersection (a b c d)
+  "This fun calculates the possible intersection point between the vector AB
+  and the vector CD: meaning `a' is the start point of AB and `b' is the
+  end point (analog for `c', `d' and CD). It returns the intersecting
+  point and if the vectors intersected or the extension of
+  these. Explanation of the calculation is here: https://www.cambridge.org/core/services/aop-cambridge-core/content/view/C6F1EC3B8FA75FB4FADC3DBA35DE4D6C/9780511804120c7_p220-293_CBO.pdf/search_and_intersection.pdf"
+  (declare (type 3d-vector a b c d))
+  (unless (or (v-equal a c)
+              (v-equal b d))
+    (let ((denom (+ (* (x a) (- (y d) (y c)))
+                    (* (x b) (- (y c) (y d)))
+                    (* (x d) (- (y b) (y a)))
+                    (* (x c) (- (y a) (y b))))))
+      (unless (equal denom 0.0d0)
+        (let* ((num-s (+ (* (x a) (- (y d) (y c)))
+                         (* (x c) (- (y a) (y d)))
+                         (* (x d) (- (y c) (y a)))))
+               (num-r (* -1 
+                         (+ (* (x a) (- (y c) (y b)))
+                            (* (x b) (- (y a) (y c)))
+                            (* (x c) (- (y b) (y a))))))
+               (s (/ num-s denom))
+               (r (/ num-r denom)))
+          (values
+           (make-3d-vector (+ (x a) 
+                              (* s
+                                 (- (x b) (x a))))
+                           (+ (y d) 
+                              (* r
+                                 (- (y d) (y c))))
+                           1.0d0)
+           (and (<= 0.0d0 s 1.0d0)
+                (<= 0.0d0 r 1.0d0))))))))
