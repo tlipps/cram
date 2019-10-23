@@ -31,7 +31,7 @@
   (:nicknames #:location-costmap #:costmap)
   (:use #:cl #:prolog #:cram-utilities #:roslisp-utilities
         #:alexandria #:roslisp #:cram-tf #:cram-designators
-        #:cl-transforms-stamped)
+        #:cl-transforms-stamped #:quadtree)
   (:shadowing-import-from :alexandria rotate)
   (:export #:make-gauss-cost-function
            #:make-location-cost-function

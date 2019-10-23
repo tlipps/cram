@@ -115,21 +115,18 @@
 (define-hook on-visualize-costmap (costmap))
 (define-hook on-visualize-costmap-sample (point))
 
-(defun init-cost-map (origin-x origin-y width height resolution type)
-  (when type
-    (cond
-      ((equal type 'arry)
-       (cma:make-double-matrix
-        (truncate (/ width resolution))
-        (truncate (/ height resolution))
-        :initial-element 1.0d0))
-      ((equal type 'quadtree)
-       (make-quadtree origin-x
-                      origin-y
-                      (+ origin-x (* width resolution))
-                      (+ origin-y (* height resolution))))
-      (t
-       (error 'simple-error "the given type ~A is not known." type)))))
+(defun init-cost-map (origin-x origin-y width height resolution)
+  (cond
+    (nil
+     (cma:make-double-matrix
+      (truncate (/ width resolution))
+      (truncate (/ height resolution))
+      :initial-element 1.0d0))
+    (t
+     (make-quadtree origin-x
+                    origin-y
+                    (+ origin-x (* width resolution))
+                    (+ origin-y (* height resolution))))))
 
 (defun normalize-cost-map (map)
   (when map
@@ -142,13 +139,13 @@
          (when (= sum 0)
            (error 'invalid-probability-distribution))
          (setf (slot-value map 'cost-map) (cma:m./ map sum))))
-      ((typep map 'quadtree)
+      (t
        (normalize-quadtree map)))))
        
        
 
 (defmethod get-cost-map ((map location-costmap))
-  "Returns the costmap matrix of `map', i.e. if not generated yet,
+  "Returns the costmap quadtree of `map', i.e. if not generated yet,
 calls the generator functions and runs normalization."
   (unless (cost-functions map)
     (error 'no-cost-functions-registered))
@@ -160,7 +157,7 @@ calls the generator functions and runs normalization."
                   #'> :key (compose
                             #'costmap-generator-name->score
                             #'generator-name)))
-      (let ((new-cost-map (init-cost-map origin-x origin-y width height resolution type)))
+      (let ((new-cost-map (init-cost-map origin-x origin-y width height resolution)))
         (dolist (generator (cost-functions map))
           (setf new-cost-map (generate generator new-cost-map map)))
         (normalize-cost-map new-cost-map)
@@ -168,11 +165,13 @@ calls the generator functions and runs normalization."
     (slot-value map 'cost-map)))
 
 (defmethod get-map-value ((map location-costmap) x y)
-  (aref (get-cost-map map)
-        (truncate (- y (slot-value map 'origin-y))
-                  (slot-value map 'resolution))
-        (truncate (- x (slot-value map 'origin-x))
-                  (slot-value map 'resolution))))
+  (when (get-cost-map map)
+    (z (get-in-quadtree (get-cost-map map) x y))))
+  ;; (aref (get-cost-map map)
+  ;;       (truncate (- y (slot-value map 'origin-y))
+  ;;                 (slot-value map 'resolution))
+  ;;       (truncate (- x (slot-value map 'origin-x))
+  ;;                 (slot-value map 'resolution))))
 
 (defmethod register-cost-function ((map location-costmap) (function function) name)
   (push (make-instance 'function-costmap-generator

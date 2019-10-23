@@ -1,4 +1,5 @@
 ;;; Copyright (c) 2012, Lorenz Moesenlechner <moesenle@in.tum.de>
+;;;               2019, Thomas Lipps         <tlipps@uni-bremen.de>
 ;;; All rights reserved.
 ;;; 
 ;;; Redistribution and use in source and binary forms, with or without
@@ -55,31 +56,58 @@
   the updated `map'. This function is allowed but not required to
   change `map'."))
 
+;; (defmethod generate ((generator map-costmap-generator) map
+;;                      (costmap-metadata occupancy-grid-metadata))
+;;   (declare (type cma:double-matrix map))
+;;   (with-slots (generator-function) generator
+;;     (with-slots (origin-x origin-y width height resolution) costmap-metadata
+;;       (let ((result (funcall generator-function costmap-metadata
+;;                              (cma:make-double-matrix
+;;                               (truncate width resolution)
+;;                               (truncate height resolution)))))
+;;         (declare (type cma:double-matrix result))
+;;         (cma:m* map result)))))
+
 (defmethod generate ((generator map-costmap-generator) map
                      (costmap-metadata occupancy-grid-metadata))
-  (declare (type cma:double-matrix map))
+  ;;(declare (type quadtree map))
   (with-slots (generator-function) generator
     (with-slots (origin-x origin-y width height resolution) costmap-metadata
       (let ((result (funcall generator-function costmap-metadata
-                             (cma:make-double-matrix
-                              (truncate width resolution)
-                              (truncate height resolution)))))
-        (declare (type cma:double-matrix result))
-        (cma:m* map result)))))
+                             (matrix->quadtree origin-x origin-y resolution 
+                                               (cma:make-double-matrix
+                                                (truncate width resolution)
+                                                (truncate height resolution))))))
+        ;;(declare (type quadtree result))
+        (merge-quadtrees map result)))))
+
+
+;; (defmethod generate ((generator function-costmap-generator) map
+;;                      (costmap-metadata occupancy-grid-metadata))
+;;   (declare (type cma:double-matrix map))
+;;   (with-slots (origin-x origin-y width height resolution) costmap-metadata
+;;     (loop for y-index from 0 below (truncate height resolution)
+;;           for y from origin-y by resolution do
+;;             (loop for x-index from 0 below (truncate width resolution)
+;;                   for x from origin-x by resolution do
+;;                     (unless (eql (aref map y-index x-index) 0.0d0)
+;;                       (setf (aref map y-index x-index)
+;;                             (* (aref map y-index x-index)
+;;                                (funcall (generator-function generator) x y)))))
+;;           finally (return map))))
 
 (defmethod generate ((generator function-costmap-generator) map
                      (costmap-metadata occupancy-grid-metadata))
-  (declare (type cma:double-matrix map))
-  (with-slots (origin-x origin-y width height resolution) costmap-metadata
-    (loop for y-index from 0 below (truncate height resolution)
-          for y from origin-y by resolution do
-            (loop for x-index from 0 below (truncate width resolution)
-                  for x from origin-x by resolution do
-                    (unless (eql (aref map y-index x-index) 0.0d0)
-                      (setf (aref map y-index x-index)
-                            (* (aref map y-index x-index)
-                               (funcall (generator-function generator) x y)))))
-          finally (return map))))
+  ;;(declare (type quadtree map))
+  ;; TODO MUST BE MORE ACCURATE
+  ;; MEANING FUN SHOULD BE MAPPED OVER QT W/ META RESOLUTION
+  ;; TO GET A BETTER RESULT
+  (quadtree-map map (generator-function generator)
+                :compose-old-and-new-fun
+                (lambda (old new)
+                  (if (eql (z old) 0.0d0)
+                      old
+                      (v* old new)))))
 
 (defun map-coordinate->array-index (coordinate resolution origin)
   "Given a coordinate value, the resolution of the map and the origin
