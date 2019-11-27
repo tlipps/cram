@@ -37,5 +37,5 @@
                 "src"
                 :components
                 ((:file "package")
-                 (:file "quadtree" :depends-on ("package")))))
+                 (:file "quadtree" :depends-on ("package"))))))
 
